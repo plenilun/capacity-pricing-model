@@ -1,35 +1,41 @@
+"""
+    此代码用于对TEU的加权处理，将TEU按作业时间进行加权
+"""
+
 import pandas as pd
-import numpy as np
 
-df = pd.read_csv("处理后的_洛杉矶_纽约到港效率.csv",
-                parse_dates=["arrival_time", "start_postime", "end_postime"])
+# 读取数据
+df = pd.read_csv("洛杉矶_长滩到港.csv")
 
-df['arrival_time'] = pd.to_datetime(df['arrival_time'], format='mixed')
-df['start_postime'] = pd.to_datetime(df['start_postime'], format='mixed')
-df['end_postime'] = pd.to_datetime(df['end_postime'], format='mixed')
+def safe_date_parse(date_str):#加载正确的日期
+    try:
+        dt = pd.to_datetime(date_str, dayfirst=True, format='mixed')
+        if dt.year < 2000 or dt.year > 2030:
+            return pd.NaT
+        return dt
+    except:
+        return pd.NaT
+
+# 2. 时间格式处理
+df['start_postime'] = df['start_postime'].apply(safe_date_parse)
+
+# 3. 筛选集装箱船舶
 container_df = df[df['shiptype'] == '集装箱'].copy()
 
+# 4. 计算每日权重和加权TEU
 container_df["date"] = container_df["start_postime"].dt.date
 container_df["daily_weight"] = container_df["berth_duration"] / 24
+container_df["weighted_teu"] = container_df["teu"] * container_df["daily_weight"]
 
-daily_weighted_teu = container_df.groupby(["leg_end_port_code", "date"]).apply(
-    lambda x: pd.Series({
-        "weighted_teu": (x["teu"] * x["daily_weight"]).sum(),
-        "weighted_length": (x["length"] * x["daily_weight"]).sum(),
-        "weighted_width": (x["width"] * x["daily_weight"]).sum(),
-        "weighted_draught": (x["draught"] * x["daily_weight"]).sum(),
-        "weighted_dwt": (x["dwt"] * x["daily_weight"]).sum(),
-        "ship_count": x["daily_weight"].sum(),  # 等效船舶数量
-        "avg_berth_duration": x["berth_duration"].mean()
-    })
-).reset_index()
+# 5. 按日期聚合（合并两个港口）
+daily_teu = container_df.groupby("date")["weighted_teu"].sum().reset_index()
 
-daily_weighted_teu["teu_proportion"] = daily_weighted_teu.groupby(
-    ["leg_end_port_code", pd.to_datetime(daily_weighted_teu["date"]).dt.to_period("M")]
-)["weighted_teu"].transform(lambda x: x / x.sum())
+# 6. 转换为周度数据（每周一为节点）
+daily_teu['date'] = pd.to_datetime(daily_teu['date'])
+weekly_teu = daily_teu.set_index('date').resample('W-MON')["weighted_teu"].sum().reset_index()
 
-container_df["operation_efficiency"] = container_df["teu"] / container_df["berth_duration"]
-daily_efficiency = container_df.groupby(["leg_end_port_code", "date"])["operation_efficiency"].mean().reset_index()
-daily_weighted_teu = pd.merge(daily_weighted_teu, daily_efficiency, on=["leg_end_port_code", "date"])
+weekly_teu.columns = ['week_start_date', 'weekly_weighted_teu']
 
-daily_weighted_teu.to_csv("daily_weighted_teu.csv", index=False)
+#保存结果
+weekly_teu.to_csv("weekly_weighted_teu.csv", index=False)
+print("周度TEU数据已保存为 weekly_weighted_teu.csv")
