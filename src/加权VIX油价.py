@@ -1,15 +1,17 @@
+"""
+    此代码用于加权股市拥堵指数VIX与布伦特原油价格，以达到与CCFI的最大相关性
+"""
+
 import pandas as pd
 from scipy.optimize import minimize
-
+#加载数据
 df_ccfi = pd.read_csv('weekly_with_CCFI.csv', usecols=['week', 'Brent_Oil_Avg', 'CCFI_weekly_avg'])
 df_vix = pd.read_csv('weekly_VIX.csv', usecols=['date', 'VIX'])
-
 df_ccfi['date'] = pd.to_datetime(df_ccfi['week'])
 df_vix['date'] = pd.to_datetime(df_vix['date'])
-
+#选择日期跨度
 start_date = '2019-01-01'
 end_date = '2023-12-31'
-
 df_ccfi = df_ccfi[(df_ccfi['date'] >= start_date) & (df_ccfi['date'] <= end_date)]
 df_vix = df_vix[(df_vix['date'] >= start_date) & (df_vix['date'] <= end_date)]
 df_merged = df_ccfi.merge(df_vix, on='date', how='inner')
@@ -19,6 +21,7 @@ df_merged = df_ccfi.merge(df_vix, on='date', how='inner')
 # df_merged['combined'] = weight_oil * df_merged['Brent_Oil_Avg'] + weight_vix * df_merged['VIX']
 # corr_combined = df_merged['combined'].corr(df_merged['CCFI_weekly_avg'])
 # print(f"加权组合与 CCFI 的相关性: {corr_combined:.3f}")
+
 def objective(weights):
     combined = weights[0] * df_merged['Brent_Oil_Avg'] + weights[1] * df_merged['VIX']
     return -combined.corr(df_merged['CCFI_weekly_avg'])  # 最小化负相关 = 最大化正相关
