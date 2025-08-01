@@ -1,3 +1,7 @@
+"""
+此代码用于对 LSTM 模型参数做探索性分析
+可在此基础上寻找效果最好的参数
+"""
 import numpy as np
 import pandas as pd
 import torch
