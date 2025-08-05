@@ -311,33 +311,43 @@ def main():
         lag=4
     )
     feature_cols = [col for col in df.columns if col.endswith('_lag4')][:7] # input前几个变量进模型中
+
+    # Min-Max 归一化到 [0,1]
     scaler = MinMaxScaler()
     data_scaled = scaler.fit_transform(df[feature_cols])
 
-    seq_len = 4 # 默认滑动窗口长度为四周（可调节））
+    # 构造滑动窗口
+    seq_len = 4 # 默认滑动窗口长度为四周（可调节）
     X, y = create_sequences(data_scaled, seq_len)
+
+    # 按时间切分训练/测试集：前 80% 为训练，后 20% 为测试
     n_train = int(0.8 * len(X))
     X_train_full, y_train_full = torch.FloatTensor(X[:n_train]), torch.FloatTensor(y[:n_train])
     X_test, y_test = torch.FloatTensor(X[n_train:]), torch.FloatTensor(y[n_train:])
 
+    # 从训练集中再划 10% 作为验证集，剩余作为真正的训练集
     n_val = int(0.1 * len(X_train_full))
     X_val, y_val = X_train_full[-n_val:], y_train_full[-n_val:]
     X_train, y_train = X_train_full[:-n_val], y_train_full[:-n_val]
 
+    # 记录最优模型与指标
     best_mse = float('inf')
     best_model = None
     best_preds = None
     best_trues = None
 
-    for trial in range(20):
+    # 多次不同随机种子试验，选取最优结果
+    for trial in range(20): # 可选择运行几个Trials
         seed = 42 + trial
         set_seed(seed)
         model = MultiLSTMModel(input_size=len(feature_cols))
         train_model(model, X_train, y_train, X_val, y_val)
 
-        # 评估
+        # 在测试集上评估
         preds, trues, mse, mae = evaluate(model, X_test, y_test, scaler)
         print(f"Trial {trial+1}: MSE={mse:.2f}, MAE={mae:.2f}")
+        
+        # 更新最优模型及指标
         if mse < best_mse:
             best_mse = mse
             best_mae = mae
