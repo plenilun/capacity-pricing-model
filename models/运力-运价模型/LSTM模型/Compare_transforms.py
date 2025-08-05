@@ -1,3 +1,8 @@
+"""
+此代码用于系统化评估不同非线性变换（identity、log1p、reciprocal、diff、Box–Cox）对 LSTM 模型预测性能的影响
+帮助选择最优预处理策略
+可对不同 features 进行非线性处理
+"""
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
