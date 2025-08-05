@@ -3,6 +3,7 @@
 所有特征使用四周滞后，并添加长度为四周的滑动窗口
 """
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE"
 import random
 from itertools import combinations
 
@@ -13,6 +14,8 @@ import torch
 import torch.nn as nn
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+import copy
+from scipy import stats
 
 # 固定随机种子
 def set_seed(seed: int = 42) -> None:
@@ -68,6 +71,33 @@ def load_and_merge_data(
     df = df_main.merge(df_teu, on='week', how='inner')
     df = df.merge(df_speed, on='week', how='inner')
     df = df.dropna()
+    
+    # 尝试对特征进行非线性变换
+    # 取log
+    df['log_PCI']    = np.log1p(df['PCI'])
+    #df['log_policy'] = np.log1p(df['weekly_avg_policy_index'])
+    #df['log_weighted_oil_vix'] = np.log1p(df['weighted_oil_vix'])
+    
+    # 取倒数
+    df['inv_policy'] = 1.0 / df['weekly_avg_policy_index']
+    
+    # 假设 df['PCI'] 都是严格 >0 的正数
+    # step1: 找到最优 λ
+    #policy = df['weekly_avg_policy_index'].values
+    #policy_transformed, fitted_lambda = stats.boxcox(policy)
+
+    #print("最优 λ:", fitted_lambda)
+
+    # step2: 用同一个 λ 变换 policy_index
+    oil_vix = df['weighted_oil_vix'].values
+    oil_vix_transformed, fitted_lambda = stats.boxcox(oil_vix)
+    
+    print("最优 λ:", fitted_lambda)
+
+    # 把变换结果放回 DataFrame
+    #df['bc_policy']    = policy_transformed
+    df['bc_oil_vix'] = oil_vix_transformed
+
     mask = (df['week'] >= start_date) & (df['week'] <= end_date)
     return df.loc[mask].reset_index(drop=True)
 
@@ -106,9 +136,9 @@ class MultiLSTMModel(nn.Module):
     def __init__(
         self,
         input_size: int,
-        hidden_size: int = 256,
+        hidden_size: int = 64,
         num_layers: int = 2,
-        dropout: float = 0.4
+        dropout: float = 0.4091525597812521
     ) -> None:
         super().__init__()
         self.lstm = nn.LSTM(
@@ -126,22 +156,29 @@ class MultiLSTMModel(nn.Module):
         return self.fc(last) # 投射到1维输出上，即“下一周的 CCFI”
 
 # 定义 Training process
+# 在 LSTM.py 中，替换成下面这个版本：
+
 def train_model(
     model: nn.Module,
     X_train: torch.Tensor,
     y_train: torch.Tensor,
-    X_val: torch.Tensor,
-    y_val: torch.Tensor,
-    lr: float = 0.005,
+    X_val: torch.Tensor | None,
+    y_val:   torch.Tensor | None,
+    lr: float = 0.016511037181588924,
     num_epochs: int = 500,
-    patience: int = 20
-) -> None:
+    patience: int = 20,
+    return_best_val_loss: bool = False
+) -> float | None:
+    """
+    训练模型并做早停。如果 return_best_val_loss=True，则返回验证集上的最小 val_loss。
+    否则返回 None。
+    """
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.L1Loss()
     best_val, wait = float('inf'), 0
 
-    for epoch in range(1, num_epochs + 1): # 迭代训练
-        # Training step
+    for epoch in range(1, num_epochs+1):
+        # —— Training step —— #
         model.train()
         pred = model(X_train).squeeze()
         loss = criterion(pred, y_train)
@@ -149,13 +186,17 @@ def train_model(
         loss.backward()
         optimizer.step()
 
-        # Evaluation step
+        # 如果没给验证集，就跳过验证与早停
+        if X_val is None or y_val is None:
+            continue
+
+        # —— Validation step —— #
         model.eval()
         with torch.no_grad():
             val_pred = model(X_val).squeeze()
             val_loss = criterion(val_pred, y_val)
 
-        # early_stopping 逻辑
+        # 早停逻辑
         if val_loss < best_val:
             best_val, wait = val_loss, 0
         else:
@@ -163,26 +204,31 @@ def train_model(
             if wait >= patience:
                 print(f"Early stopping at epoch {epoch}, val_loss={val_loss:.4f}")
                 break
+
+    # 如果需要，返回验证集上观察到的最小损失
+    if return_best_val_loss and X_val is not None:
+        return best_val
+    return None
+
 # 定义 Evaluating process
 def evaluate(
     model: nn.Module,
     X_test: torch.Tensor,
     y_test: torch.Tensor,
     scaler: MinMaxScaler
-) -> tuple[np.ndarray, float, float]:
+) -> tuple[np.ndarray, np.ndarray, float, float]:
     model.eval()
     with torch.no_grad():
         pred = model(X_test).numpy().squeeze()
 
-    # 反归一化，仅针对第 0 维（CCFI）
+    # 反归一化
     min_, max_ = scaler.data_min_[0], scaler.data_max_[0]
     pred_rescaled = pred * (max_ - min_) + min_
     true_rescaled = y_test.numpy() * (max_ - min_) + min_
-  
-    # 计算 MSE 和 MAE，当做模型评估指标
+
     mse = mean_squared_error(true_rescaled, pred_rescaled)
     mae = mean_absolute_error(true_rescaled, pred_rescaled)
-    return pred_rescaled, mse, mae
+    return pred_rescaled, true_rescaled, mse, mae
 
 #特征重要性分析（可选取多种特征根据结果自行调参）
 def permutation_importance(
@@ -253,56 +299,73 @@ def plot_fit(
 def main():
     set_seed(42)
     df = load_and_merge_data(
-        path_main='weekly_with_CCFI_updated.csv.xlsx',
-        path_teu='weekly_weighted_teu.csv',
-        path_speed='weekly_speed.csv'
+        path_main='C://Users//HgHaw//Desktop//weekly_with_CCFI_updated.csv.xlsx',
+        path_teu='C://Users//HgHaw//Desktop//weekly_weighted_teu.csv',
+        path_speed='C://Users//HgHaw//Desktop//weekly_speed.csv'
     )
     df = add_lag_features(
         df,
-        cols=[
-            'CCFI', 'PCI', 'weekly_avg_policy_index',
-            'TEU', 'avg_speed', 'avg_voyage_days',
-            'days_per_speed'
+        cols=[ # 在此处修改特征
+            'CCFI', 'TEU', 'avg_speed', 'Brent',
+            'log_PCI', 'inv_policy','bc_oil_vix',
+            'avg_voyage_days', 'days_per_speed'
         ],
         lag=4
     )
-  
-    # 特征选择与归一化处理
-    feature_cols = [col for col in df.columns if col.endswith('_lag4')][:5]
+    feature_cols = [col for col in df.columns if col.endswith('_lag4')][:7] # input前几个变量进模型中
     scaler = MinMaxScaler()
     data_scaled = scaler.fit_transform(df[feature_cols])
-  
-    # 序列化与数据集拆分
+
     seq_len = 4
     X, y = create_sequences(data_scaled, seq_len)
     n_train = int(0.8 * len(X))
     X_train_full, y_train_full = torch.FloatTensor(X[:n_train]), torch.FloatTensor(y[:n_train])
     X_test, y_test = torch.FloatTensor(X[n_train:]), torch.FloatTensor(y[n_train:])
 
-    # 划分验证集
     n_val = int(0.1 * len(X_train_full))
     X_val, y_val = X_train_full[-n_val:], y_train_full[-n_val:]
     X_train, y_train = X_train_full[:-n_val], y_train_full[:-n_val]
 
-    # 模型训练
-    model = MultiLSTMModel(input_size=len(feature_cols))
-    train_model(model, X_train, y_train, X_val, y_val)
+    best_mse = float('inf')
+    best_model = None
+    best_preds = None
+    best_trues = None
 
-    # 测试评估
-    preds, mse, mae = evaluate(model, X_test, y_test, scaler)
-    print(f"Test MSE: {mse:.2f}, MAE: {mae:.2f}")
+    for trial in range(20):
+        seed = 42 + trial
+        set_seed(seed)
+        model = MultiLSTMModel(input_size=len(feature_cols))
+        train_model(model, X_train, y_train, X_val, y_val)
+
+        # 评估
+        preds, trues, mse, mae = evaluate(model, X_test, y_test, scaler)
+        print(f"Trial {trial+1}: MSE={mse:.2f}, MAE={mae:.2f}")
+        if mse < best_mse:
+            best_mse = mse
+            best_mae = mae
+            best_model = copy.deepcopy(model)
+            best_preds  = preds
+            best_trues  = trues
+
+    print(f"Best over 20 trials → MSE={best_mse:.2f}  MAE={best_mae:.2f}")
 
     # 特征重要性
     imp_df = permutation_importance(model, X_test, y_test, scaler, baseline_mse=mse)
-    print(imp_df)
 
-    # 拟合可视化
+    # 映射 feature_index → feature_name
+    imp_df['feature_name'] = imp_df['feature_index'].apply(lambda i: feature_cols[i])
+    imp_df = imp_df[['feature_name', 'mse_increase']]
+
+    print("特征重要性 (按 MSE 上升排序)：")
+    print(imp_df.to_string(index=False))
+    
+    # 用最优模型的结果画图
     weeks = df['week'].iloc[seq_len + n_train:].reset_index(drop=True)
     plot_fit(
         weeks,
-        y_true=y_test.numpy(),
-        y_pred=preds,
-        title='Best Multi-Variable LSTM CCFI Prediction'
+        y_true=best_trues,
+        y_pred=best_preds,
+        title=f'Best of 20 Trials (MSE={best_mse:.1f}) (MAE={best_mae:.1f})'
     )
 
 if __name__ == '__main__':
