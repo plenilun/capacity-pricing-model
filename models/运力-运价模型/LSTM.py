@@ -156,8 +156,6 @@ class MultiLSTMModel(nn.Module):
         return self.fc(last) # 投射到1维输出上，即“下一周的 CCFI”
 
 # 定义 Training process
-# 在 LSTM.py 中，替换成下面这个版本：
-
 def train_model(
     model: nn.Module,
     X_train: torch.Tensor,
@@ -230,7 +228,7 @@ def evaluate(
     mae = mean_absolute_error(true_rescaled, pred_rescaled)
     return pred_rescaled, true_rescaled, mse, mae
 
-#特征重要性分析（可选取多种特征根据结果自行调参）
+# 特征重要性分析（可选取多种特征根据结果自行调参）
 def permutation_importance(
     model: nn.Module,
     X_test: torch.Tensor,
@@ -316,7 +314,7 @@ def main():
     scaler = MinMaxScaler()
     data_scaled = scaler.fit_transform(df[feature_cols])
 
-    seq_len = 4
+    seq_len = 4 # 默认滑动窗口长度为四周（可调节））
     X, y = create_sequences(data_scaled, seq_len)
     n_train = int(0.8 * len(X))
     X_train_full, y_train_full = torch.FloatTensor(X[:n_train]), torch.FloatTensor(y[:n_train])
