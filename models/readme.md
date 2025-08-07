@@ -5,3 +5,4 @@
   3. OLS + RF
   4. VAR
   5. XGBoost-OLS
+  6. BVAR
