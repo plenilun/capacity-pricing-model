@@ -1,0 +1,224 @@
+---
+title: "bvar2"
+author: "STA3005 Statistical Computing"
+date: 'Due date: Apr 23, 11:59 pm'
+output:
+  pdf_document:
+    df_print: paged
+date: "2025-08-05"
+---
+
+
+下面代码是在对处理好的差分时间序列数据训练一个贝叶斯VAR模型（BVAR），且为了保证结果可复现，先固定随机种子。
+
+```{r, include=FALSE}
+# ------------------------------------------
+#  安装必要包（如未安装，请取消注释运行）
+# ------------------------------------------
+install.packages("remotes")
+install.packages("BVAR")
+install.packages("readr")
+```
+
+
+```{r, include=FALSE}
+install.packages("readxl")
+install.packages("lubridate")
+install.packages("dplyr")
+install.packages("ggplot2")
+```
+
+```{r, include=FALSE}
+library(readr)
+library(BVAR)       # CRAN 包用于层级Bayesian VAR 模型 :contentReference[oaicite:1]{index=1}
+library(readxl)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+```
+
+```{r}
+# 参数
+window_size <- 120   # 训练窗口长度
+horizon <- 4         # 预测步长
+roll_steps <- 30     # 滚动次数
+
+# 结果存储
+all_forecasts <- list()
+all_truths <- list()
+
+# 假设路径为：
+B_path <- "/Users/lihongyu/Desktop/weekly_speed.csv"
+C_path <- "/Users/lihongyu/Desktop/weekly_weighted_teu.csv"
+A_path <- "/Users/lihongyu/Desktop/weekly_with_CCFI(PCI优化).csv"  # ⚠️ 替换为你的 Excel 路径
+df <- read_csv(A_path)
+
+# ------------------------------------------
+#  数据处理与筛选
+# ------------------------------------------
+df <- df %>%
+  mutate(week = as.Date(week)) %>%
+  filter(week >= as.Date("2021-03-20") & week <= as.Date("2023-12-31")) %>% # 选择时间范围
+  rename(
+    CCFI = CCFI_weekly_avg,
+    Brent = Brent_Oil_Avg,
+    Policy = weekly_avg_policy_index,
+    VIX = weighted_oil_vix
+  ) %>%
+  select(week, IPCI, Brent, Policy, VIX, CCFI) # 选择变量
+
+
+
+# 读取 B 路径数据
+df_B <- read_csv(B_path) %>%
+  mutate(date = as.Date(date) + 1) %>%   # 日期加一天
+  select(date, avg_speed)
+head(df_B)
+
+# 读取 C 路径数据
+df_C <- read_csv(C_path) %>%
+  mutate(
+    date = as.Date(date),
+  ) %>%
+  select(date, weighted_teu)
+# 主数据：已读入为 df，先把 week 改为 date，便于 merge
+df <- df %>%
+  rename(date = week)
+
+# 合并 B、C 到主数据
+df <- df %>%
+  left_join(df_C, by = "date") %>%
+  left_join(df_B, by = "date")
+
+# 重新筛选时间范围（从 2020-01-20 起）
+df <- df %>%
+  filter(date >= as.Date("2021-03-20")) %>%
+  select(date, IPCI, Brent, Policy, VIX, avg_speed, weighted_teu, CCFI)
+range(df$date)
+head(df,120)
+
+
+
+
+
+```
+```{r}
+# ------------------------------------------
+#  训练模型
+# ------------------------------------------
+for(i in 0:(roll_steps - 1)) {
+  
+  train_start <- i + 1
+  train_end <- train_start + window_size - 1
+  pred_start <- train_end + 1
+  pred_end <- pred_start + horizon - 1
+  
+  if(pred_end > nrow(df)) break
+  
+  # 取训练集
+  train_df <- df[train_start:train_end, ]  
+  
+  # 差分，去掉第一行NA
+  # 差分处理
+  diff_train_df <- train_df %>%
+    arrange(date) %>%
+    mutate(across(c(IPCI, Brent, weighted_teu, avg_speed,CCFI), ~ . - lag(.))) %>%
+    filter(!is.na(CCFI))
+  
+  X_train <- diff_train_df %>%
+    select(IPCI, Brent,  weighted_teu, avg_speed, CCFI) %>%
+    na.omit() %>%
+    mutate(across(everything(), scale)) %>%  # 🔥 在这里加上归一化
+    as.matrix()
+    cat("X_train 行数为：", nrow(X_train), "\n")
+
+  set.seed(123)
+  model <- bvar(X_train, lags = 4, draws = 1500, burnin = 500)
+  
+  # 预测
+  fc <- predict(model, horizon = horizon)
+  
+  head(fc)
+  var_idx <- which(fc$variables == "CCFI")
+  print(var_idx)
+  
+  ccfi_diff_forecast <- fc$fcast[, , var_idx]  # dim: 模拟次数 x horizon
+  
+  # 差分还原预测值（取均值）
+  last_ccfi <- train_df$CCFI[nrow(train_df)]  # 训练集最后一期原始CCFI
+  ccfi_pred_matrix <- t(apply(ccfi_diff_forecast, 1, cumsum)) + last_ccfi
+  ccfi_mean_pred <- apply(ccfi_pred_matrix, 2, mean)  # 预测均值
+  
+  # 真实CCFI
+    # ⚠️ 更稳健地获取真实CCFI
+  train_end_date <- train_df$date[nrow(train_df)]
+  last_idx <- which(df$date == train_end_date)
+
+# 安全检查：确保不会越界
+  if ((last_idx + horizon) > nrow(df)) break
+
+  true_ccfi <- df$CCFI[(last_idx + 1):(last_idx + horizon)]
+  print(ccfi_mean_pred)
+  print(true_ccfi)
+  # 存储结果
+  all_forecasts[[i+1]] <- ccfi_mean_pred
+  all_truths[[i+1]] <- true_ccfi
+}
+
+# 合并预测与真实
+pred_mat <- do.call(rbind, all_forecasts)
+truth_mat <- do.call(rbind, all_truths)
+
+# 计算第4周误差
+mse_4 <- mean((pred_mat[, 4] - truth_mat[, 4])^2)
+mae_4 <- mean(abs(pred_mat[, 4] - truth_mat[, 4]))
+
+cat("第4周预测 MSE =", mse_4, "\n")
+cat("第4周预测 MAE =", mae_4, "\n")
+```
+
+
+
+
+```{r}
+# ------------------------------------------
+#  画图直观展示
+# ------------------------------------------
+
+library(tidyverse)
+library(lubridate)
+
+# 取所有滚动预测第1周的预测值和真实值(也可以其他周)
+pred_h1 <- sapply(all_forecasts, function(x) x[4])  # 取每轮预测的第1周
+truth_h1 <- sapply(all_truths, function(x) x[4])    # 真实值第1周
+
+# 构造时间序列对应的week（预测起点时间）
+# 预测起点是训练集最后一周后1周，即 df$week 窗口大小之后的日期
+time_labels <- df$date[(window_size + 1):(window_size + length(pred_h1))]
+
+# 构造绘图数据框
+plot_df <- tibble(
+  Week = time_labels,
+  Prediction = pred_h1,
+  Truth = truth_h1
+) %>%
+  pivot_longer(cols = c("Prediction", "Truth"), names_to = "Type", values_to = "CCFI")
+
+# 画图
+ggplot(plot_df, aes(x = Week, y = CCFI, color = Type)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 2) +
+  labs(
+    title = "Rolling Forecast: Horizon 1 CCFI Prediction vs Truth",
+    x = "Week",
+    y = "CCFI Index",
+    color = "Legend"
+  ) +
+  scale_x_date(date_labels = "%Y-W%V", date_breaks = "4 weeks") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+```
+
