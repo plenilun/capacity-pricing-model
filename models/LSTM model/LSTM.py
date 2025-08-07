@@ -375,6 +375,15 @@ def main():
         y_pred=best_preds,
         title=f'Best of 20 Trials (MSE={best_mse:.1f}) (MAE={best_mae:.1f})'
     )
+    
+    # 保存预测结果
+    output_df = pd.DataFrame({
+        'week': weeks,
+        'true_CCFI': best_trues,
+        'predicted_CCFI': best_preds
+    })
+    output_df.to_csv('C://Users//HgHaw//Desktop//ccfi_predictions_LSTM.csv', index=False, encoding='utf-8-sig') # 结果保存位置
+    print("预测结果已保存至 ccfi_predictions_LSTM.csv")
 
 if __name__ == '__main__':
     main()
