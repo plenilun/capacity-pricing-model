@@ -11,28 +11,17 @@ import matplotlib.pyplot as plt
 import os
 
 
-def load_and_merge_data():#加载数据
-    teu_df = pd.read_csv('weekly_weighted_teu.csv', usecols=['date', 'weighted_teu'])
-    teu_df['date'] = pd.to_datetime(teu_df['date'])
-    speed_df = pd.read_csv('weekly_speed.csv', usecols=['date', 'avg_speed'])
-    speed_df['date'] = pd.to_datetime(speed_df['date']).dt.tz_localize(None)
-    oil_ccfi_df = pd.read_csv('weekly_with_CCFI1.csv',
-                              usecols=['week', 'weighted_oil_vix', 'CCFI_weekly_avg',
-                                       'weekly_avg_policy_index', 'IPCI'])
-    oil_ccfi_df['week'] = pd.to_datetime(oil_ccfi_df['week'])
-#转换政治指数为平方
-    #oil_ccfi_df['weekly_avg_policy_index'] = oil_ccfi_df['weekly_avg_policy_index'] ** 2
+def load_and_merge_data():
+    ccfi_df = pd.read_csv('weekly_with_CCFI_full.csv',
+                          usecols=['week', 'CCFI_weekly_avg', 'weighted_teu',
+                                   'avg_speed', 'weighted_oil_vix',
+                                   'weekly_avg_policy_index', 'IPCI'])
 
-    # 合并数据
-    merged = pd.merge(
-        oil_ccfi_df, teu_df, left_on='week', right_on='date', how='left'
-    )
-    merged = pd.merge(
-        merged, speed_df, left_on='week', right_on='date', how='left',
-        suffixes=('', '_speed')
-    ).drop(columns=['date', 'date_speed']).dropna()
-
-    return {'Combined': merged}
+    # 转换日期格式
+    ccfi_df['week'] = pd.to_datetime(ccfi_df['week'])
+    # 确保没有缺失值
+    ccfi_df = ccfi_df.dropna()
+    return {'Combined': ccfi_df}
 
 
 def create_features(df, lag=4):#添加滞后特征
