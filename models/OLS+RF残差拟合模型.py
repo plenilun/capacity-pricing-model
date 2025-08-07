@@ -114,8 +114,8 @@ def train_and_evaluate(port_data):#训练模型
         final_predictions = pd.concat(all_predictions)
         if not os.path.exists('results'):
             os.makedirs('results')
-        final_predictions.to_csv('残差_predictions.csv', index=False)
-        print("预测结果已保存到 results/stacking_predictions.csv")
+        final_predictions.to_csv('results/残差_predictions.csv', index=False)
+        print("预测结果已保存到 残差_predictions.csv")
     return results
 
 
