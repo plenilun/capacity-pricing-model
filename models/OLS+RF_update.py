@@ -12,7 +12,7 @@ import os
 
 
 def load_and_merge_data():
-    ccfi_df = pd.read_csv('weekly_with_CCFI_full.csv',
+    ccfi_df = pd.read_csv('data/processed data/weekly_with_CCFI_full.csv',
                           usecols=['week', 'CCFI_weekly_avg', 'weighted_teu',
                                    'avg_speed', 'weighted_oil_vix',
                                    'weekly_avg_policy_index', 'IPCI'])
@@ -21,6 +21,7 @@ def load_and_merge_data():
     ccfi_df['week'] = pd.to_datetime(ccfi_df['week'])
     # 确保没有缺失值
     ccfi_df = ccfi_df.dropna()
+
     return {'Combined': ccfi_df}
 
 
