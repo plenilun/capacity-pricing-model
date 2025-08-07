@@ -89,7 +89,7 @@ def train_stacking_model(port_data):
         final_predictions = pd.concat(all_predictions)
         if not os.path.exists('results'):
             os.makedirs('results')
-        final_predictions.to_csv('stacking_predictions.csv', index=False)
+        final_predictions.to_csv('results/stacking_predictions.csv', index=False)
         print("预测结果已保存到 results/stacking_predictions.csv")
 
     return results
